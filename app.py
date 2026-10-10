@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, time, timedelta
 import logging
 import os
+import threading
 from flask import Flask, request
 import psycopg2
 from telegram import Update
@@ -31,7 +32,28 @@ def index():
   return 'Bot is alive!', 200
 
 
+# Ініціалізація Telegram бота
 application = Application.builder().token(TOKEN).build()
+
+# Створюємо окремий фоновий event loop для роботи Telegram-бота та JobQueue
+bot_loop = asyncio.new_event_loop()
+
+
+def run_bot_loop():
+  asyncio.set_event_loop(bot_loop)
+
+  async def init_and_start():
+    await application.initialize()
+    await application.start()
+    if application.job_queue:
+      await application.job_queue.start()
+
+  bot_loop.run_until_complete(init_and_start())
+  bot_loop.run_forever()
+
+
+# Запускаємо event loop у фоновому потоці
+threading.Thread(target=run_bot_loop, daemon=True).start()
 
 
 def get_db_connection():
@@ -193,8 +215,10 @@ async def check_birthdays(context: ContextTypes.DEFAULT_TYPE):
 application.add_handler(CommandHandler('set', set_birthday))
 application.add_handler(CommandHandler('list', list_birthdays))
 
-job_queue = application.job_queue
-job_queue.run_daily(check_birthdays, time=time(hour=0, minute=1, second=0))
+if application.job_queue:
+  application.job_queue.run_daily(
+      check_birthdays, time=time(hour=0, minute=1, second=0)
+  )
 
 
 @flask_app.route('/webhook', methods=['POST', 'GET'])
@@ -202,15 +226,15 @@ def webhook():
   if request.method == 'GET':
     return 'Bot is running', 200
 
-  if request.headers.get('content-type') == 'application/json':
+  content_type = request.headers.get('content-type', '')
+  if 'application/json' in content_type:
     json_string = request.get_data().decode('utf-8')
     update = Update.de_json(json_string, application.bot)
 
-    async def process():
-      await application.initialize()
-      await application.process_update(update)
-
-    asyncio.run(process())
+    # Безпечно передаємо апдейт у фоновий цикл бота
+    asyncio.run_coroutine_threadsafe(
+        application.process_update(update), bot_loop
+    )
     return 'OK', 200
   return 'Forbidden', 403
 
