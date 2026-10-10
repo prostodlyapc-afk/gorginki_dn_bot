@@ -4,6 +4,7 @@ import logging
 import os
 from flask import Flask, request
 import psycopg2
+import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -14,9 +15,14 @@ logging.basicConfig(
 
 TOKEN = os.environ.get('TOKEN')
 PORT = int(os.environ.get('PORT', '10000'))
+WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
-# Ініціалізація Flask-сервера для аптайму та вебхука
+print(f'DEBUG: TOKEN present = {bool(TOKEN)}')
+print(f'DEBUG: PORT = {PORT}')
+print(f'DEBUG: RENDER_EXTERNAL_HOSTNAME = {WEBHOOK_URL}')
+print(f'DEBUG: DATABASE_URL present = {bool(DATABASE_URL)}')
+
 flask_app = Flask(__name__)
 
 
@@ -25,7 +31,6 @@ def index():
   return 'Bot is alive!', 200
 
 
-# Ініціалізація Telegram бота
 application = Application.builder().token(TOKEN).build()
 
 
@@ -192,7 +197,6 @@ job_queue = application.job_queue
 job_queue.run_daily(check_birthdays, time=time(hour=0, minute=1, second=0))
 
 
-# Обробка вебхука через Flask (підтримує і GET для UptimeRobot, і POST від Telegram)
 @flask_app.route('/webhook', methods=['POST', 'GET'])
 def webhook():
   if request.method == 'GET':
@@ -212,4 +216,11 @@ def webhook():
 
 
 if __name__ == '__main__':
+  if WEBHOOK_URL:
+    webhook_uri = f'https://{WEBHOOK_URL}/webhook'
+    response = requests.get(
+        f'https://api.telegram.org/bot{TOKEN}/setWebhook?url={webhook_uri}'
+    )
+    print(f'DEBUG: Set webhook response -> {response.text}')
+
   flask_app.run(host='0.0.0.0', port=PORT)
