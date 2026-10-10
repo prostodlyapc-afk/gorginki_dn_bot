@@ -1,3 +1,4 @@
+from datetime import datetime, time, timedelta
 import logging
 import os
 import sqlite3
@@ -116,16 +117,67 @@ async def list_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE):
   await update.message.reply_text(text)
 
 
-def main():
-  import httpx
+# Функція, яка щодня перевіряє дні народження
+async def check_birthdays(context: ContextTypes.DEFAULT_TYPE):
+  now = datetime.now()
+  today_day = now.day
+  today_month = now.month
 
+  # Дата через 2 дні
+  future = now + timedelta(days=2)
+  future_day = future.day
+  future_month = future.month
+
+  conn = sqlite3.connect('birthdays.db')
+  cursor = conn.cursor()
+
+  # Шукаємо тих, у кого день народження СЬОГОДНІ
+  cursor.execute(
+      'SELECT chat_id, name FROM birthdays WHERE day = ? AND month = ?',
+      (today_day, today_month),
+  )
+  today_bds = cursor.fetchall()
+
+  # Шукаємо тих, у кого день народження ЧЕРЕЗ 2 ДНІ
+  cursor.execute(
+      'SELECT chat_id, name FROM birthdays WHERE day = ? AND month = ?',
+      (future_day, future_month),
+  )
+  future_bds = cursor.fetchall()
+  conn.close()
+
+  # Надсилаємо сповіщення на день народження
+  for chat_id, name in today_bds:
+    try:
+      await context.bot.send_message(
+          chat_id=chat_id,
+          text=f'🎉 Спеціальне нагадування: Сьогодні день народження у {name}! Вітаємо! 🥳',
+      )
+    except Exception as e:
+      logging.error(f'Failed to send today notification to {chat_id}: {e}')
+
+  # Надсилаємо сповіщення за 2 дні
+  for chat_id, name in future_bds:
+    try:
+      await context.bot.send_message(
+          chat_id=chat_id,
+          text=f'⏳ Нагадування: через 2 дні ({future_day:02d}.{future_month:02d}) день народження у {name}! Готуйте подарунки! 🎁',
+      )
+    except Exception as e:
+      logging.error(f'Failed to send future notification to {chat_id}: {e}')
+
+
+def main():
   app = Application.builder().token(TOKEN).build()
 
   app.add_handler(CommandHandler('set_bd', set_birthday))
   app.add_handler(CommandHandler('list_bd', list_birthdays))
 
+  # Додаємо автоматичну задачу на виконання щодня о 00:01
+  job_queue = app.job_queue
+  job_queue.run_daily(check_birthdays, time=time(hour=0, minute=1, second=0))
+
   if WEBHOOK_URL:
-    # Використовуємо чистий шлях /webhook замість токена з двокрапкою
     webhook_uri = f'https://{WEBHOOK_URL}/webhook'
     print(f'DEBUG: Setting webhook to {webhook_uri}')
 
