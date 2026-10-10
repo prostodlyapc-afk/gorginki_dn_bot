@@ -1,7 +1,7 @@
 from datetime import datetime, time, timedelta
 import logging
 import os
-import sqlite3
+import psycopg2
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -13,26 +13,34 @@ logging.basicConfig(
 TOKEN = os.environ.get('TOKEN')
 PORT = int(os.environ.get('PORT', '10000'))
 WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
 print(f'DEBUG: TOKEN present = {bool(TOKEN)}')
 print(f'DEBUG: PORT = {PORT}')
 print(f'DEBUG: RENDER_EXTERNAL_HOSTNAME = {WEBHOOK_URL}')
+print(f'DEBUG: DATABASE_URL present = {bool(DATABASE_URL)}')
+
+
+def get_db_connection():
+  return psycopg2.connect(DATABASE_URL, sslmode='require')
 
 
 def init_db():
-  conn = sqlite3.connect('birthdays.db')
+  conn = get_db_connection()
   cursor = conn.cursor()
-  cursor.execute('''
+  cursor.execute("""
         CREATE TABLE IF NOT EXISTS birthdays (
-            chat_id INTEGER,
-            user_id INTEGER,
+            chat_id BIGINT,
+            user_id BIGINT,
             name TEXT,
             day INTEGER,
             month INTEGER,
+            year INTEGER,
             PRIMARY KEY (chat_id, user_id)
         )
-    ''')
+    """)
   conn.commit()
+  cursor.close()
   conn.close()
 
 
@@ -48,18 +56,23 @@ async def set_birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
   if not context.args:
     await update.message.reply_text(
-        'Вкажіть дату у форматі ДД.ММ (наприклад, /set_bd 24.08)'
+        'Вкажіть дату у форматі ДД.ММ.РРРР (наприклад, /set 24.08.2000)'
     )
     return
 
   date_str = context.args[0]
   try:
-    day, month = map(int, date_str.split('.'))
-    if not (1 <= day <= 31 and 1 <= month <= 12):
+    day, month, year = map(int, date_str.split('.'))
+    if not (
+        1 <= day <= 31
+        and 1 <= month <= 12
+        and 1900 <= year <= datetime.now().year
+    ):
       raise ValueError()
   except ValueError:
     await update.message.reply_text(
-        'Неправильний формат! Використовуйте ДД.ММ (наприклад, /set_bd 24.08)'
+        'Неправильний формат! Використовуйте ДД.ММ.РРРР (наприклад, /set'
+        ' 24.08.2000)'
     )
     return
 
@@ -68,20 +81,24 @@ async def set_birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
   chat_id = update.effective_chat.id
   user_id = user.id
 
-  conn = sqlite3.connect('birthdays.db')
+  conn = get_db_connection()
   cursor = conn.cursor()
+  # У PostgreSQL використовуємо ON CONFLICT замість INSERT OR REPLACE
   cursor.execute(
-      '''
-        INSERT OR REPLACE INTO birthdays (chat_id, user_id, name, day, month)
-        VALUES (?, ?, ?, ?, ?)
-    ''',
-      (chat_id, user_id, name, day, month),
+      """
+        INSERT INTO birthdays (chat_id, user_id, name, day, month, year)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (chat_id, user_id) 
+        DO UPDATE SET name = EXCLUDED.name, day = EXCLUDED.day, month = EXCLUDED.month, year = EXCLUDED.year
+    """,
+      (chat_id, user_id, name, day, month, year),
   )
   conn.commit()
+  cursor.close()
   conn.close()
 
   await update.message.reply_text(
-      f'✅ День народження для {name} ({day:02d}.{month:02d}) збережено!'
+      f'✅ День народження для {name} ({day:02d}.{month:02d}.{year}) збережено!'
   )
 
 
@@ -93,11 +110,11 @@ async def list_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return
 
   chat_id = update.effective_chat.id
-  conn = sqlite3.connect('birthdays.db')
+  conn = get_db_connection()
   cursor = conn.cursor()
   cursor.execute(
-      'SELECT name, day, month FROM birthdays WHERE chat_id = ? ORDER BY month,'
-      ' day',
+      'SELECT name, day, month, year FROM birthdays WHERE chat_id = %s ORDER BY'
+      ' month, day',
       (chat_id,),
   )
   rows = cursor.fetchall()
@@ -111,42 +128,37 @@ async def list_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
   text = '📅 Дні народження учасників цього чату:\n\n'
   for row in rows:
-    name, day, month = row
-    text += f'• {name} — {day:02d}.{month:02d}\n'
+    name, day, month, year = row
+    text += f'• {name} — {day:02d}.{month:02d}.{year}\n'
 
   await update.message.reply_text(text)
 
 
-# Функція, яка щодня перевіряє дні народження
 async def check_birthdays(context: ContextTypes.DEFAULT_TYPE):
   now = datetime.now()
   today_day = now.day
   today_month = now.month
 
-  # Дата через 2 дні
   future = now + timedelta(days=2)
   future_day = future.day
   future_month = future.month
 
-  conn = sqlite3.connect('birthdays.db')
+  conn = get_db_connection()
   cursor = conn.cursor()
 
-  # Шукаємо тих, у кого день народження СЬОГОДНІ
   cursor.execute(
-      'SELECT chat_id, name FROM birthdays WHERE day = ? AND month = ?',
+      'SELECT chat_id, name FROM birthdays WHERE day = %s AND month = %s',
       (today_day, today_month),
   )
   today_bds = cursor.fetchall()
 
-  # Шукаємо тих, у кого день народження ЧЕРЕЗ 2 ДНІ
   cursor.execute(
-      'SELECT chat_id, name FROM birthdays WHERE day = ? AND month = ?',
+      'SELECT chat_id, name FROM birthdays WHERE day = %s AND month = %s',
       (future_day, future_month),
   )
   future_bds = cursor.fetchall()
   conn.close()
 
-  # Надсилаємо сповіщення на день народження
   for chat_id, name in today_bds:
     try:
       await context.bot.send_message(
@@ -156,7 +168,6 @@ async def check_birthdays(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
       logging.error(f'Failed to send today notification to {chat_id}: {e}')
 
-  # Надсилаємо сповіщення за 2 дні
   for chat_id, name in future_bds:
     try:
       await context.bot.send_message(
@@ -170,10 +181,10 @@ async def check_birthdays(context: ContextTypes.DEFAULT_TYPE):
 def main():
   app = Application.builder().token(TOKEN).build()
 
-  app.add_handler(CommandHandler('set_bd', set_birthday))
-  app.add_handler(CommandHandler('list_bd', list_birthdays))
+  # Змінено назви команд на /set та /list
+  app.add_handler(CommandHandler('set', set_birthday))
+  app.add_handler(CommandHandler('list', list_birthdays))
 
-  # Додаємо автоматичну задачу на виконання щодня о 00:01
   job_queue = app.job_queue
   job_queue.run_daily(check_birthdays, time=time(hour=0, minute=1, second=0))
 
