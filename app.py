@@ -117,6 +117,8 @@ async def list_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+  import httpx
+
   app = Application.builder().token(TOKEN).build()
 
   app.add_handler(CommandHandler('set_bd', set_birthday))
@@ -125,6 +127,15 @@ def main():
   if WEBHOOK_URL:
     webhook_uri = f'https://{WEBHOOK_URL}/{TOKEN}'
     print(f'DEBUG: Setting webhook to {webhook_uri}')
+
+    try:
+      res = httpx.get(
+          f'https://api.telegram.org/bot{TOKEN}/getWebhookInfo', timeout=10
+      )
+      print(f'DEBUG: Telegram Webhook Info -> {res.text}')
+    except Exception as e:
+      print(f'DEBUG: Error fetching webhook info -> {e}')
+
     app.run_webhook(
         listen='0.0.0.0',
         port=PORT,
