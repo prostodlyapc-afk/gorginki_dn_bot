@@ -125,21 +125,15 @@ def main():
   app.add_handler(CommandHandler('list_bd', list_birthdays))
 
   if WEBHOOK_URL:
-    webhook_uri = f'https://{WEBHOOK_URL}/{TOKEN}'
+    # Використовуємо чистий шлях /webhook замість токена з двокрапкою
+    webhook_uri = f'https://{WEBHOOK_URL}/webhook'
     print(f'DEBUG: Setting webhook to {webhook_uri}')
-
-    try:
-      res = httpx.get(
-          f'https://api.telegram.org/bot{TOKEN}/getWebhookInfo', timeout=10
-      )
-      print(f'DEBUG: Telegram Webhook Info -> {res.text}')
-    except Exception as e:
-      print(f'DEBUG: Error fetching webhook info -> {e}')
 
     app.run_webhook(
         listen='0.0.0.0',
         port=PORT,
         webhook_url=webhook_uri,
+        url_path='webhook',
         drop_pending_updates=True,
     )
   else:
