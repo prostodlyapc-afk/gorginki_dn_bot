@@ -4,9 +4,9 @@ import logging
 import os
 from flask import Flask, request
 import psycopg2
-import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+import urllib.request
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -218,9 +218,16 @@ def webhook():
 if __name__ == '__main__':
   if WEBHOOK_URL:
     webhook_uri = f'https://{WEBHOOK_URL}/webhook'
-    response = requests.get(
+    api_url = (
         f'https://api.telegram.org/bot{TOKEN}/setWebhook?url={webhook_uri}'
     )
-    print(f'DEBUG: Set webhook response -> {response.text}')
+    try:
+      with urllib.request.urlopen(api_url) as response:
+        print(
+            f'DEBUG: Set webhook response ->'
+            f' {response.read().decode("utf-8")}'
+        )
+    except Exception as e:
+      print(f'DEBUG: Failed to set webhook: {e}')
 
   flask_app.run(host='0.0.0.0', port=PORT)
