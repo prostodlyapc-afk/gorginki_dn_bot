@@ -2,11 +2,7 @@ import logging
 import os
 import sqlite3
 from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -14,23 +10,27 @@ logging.basicConfig(
 )
 
 TOKEN = os.environ.get('TOKEN')
-PORT = int(os.environ.get('PORT', '8080'))
+PORT = int(os.environ.get('PORT', '10000'))
 WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
+
+print(f'DEBUG: TOKEN present = {bool(TOKEN)}')
+print(f'DEBUG: PORT = {PORT}')
+print(f'DEBUG: RENDER_EXTERNAL_HOSTNAME = {WEBHOOK_URL}')
 
 
 def init_db():
   conn = sqlite3.connect('birthdays.db')
   cursor = conn.cursor()
   cursor.execute('''
-         CREATE TABLE IF NOT EXISTS birthdays (
-             chat_id INTEGER,
-             user_id INTEGER,
-             name TEXT,
-             day INTEGER,
-             month INTEGER,
-             PRIMARY KEY (chat_id, user_id)
-         )
-     ''')
+        CREATE TABLE IF NOT EXISTS birthdays (
+            chat_id INTEGER,
+            user_id INTEGER,
+            name TEXT,
+            day INTEGER,
+            month INTEGER,
+            PRIMARY KEY (chat_id, user_id)
+        )
+    ''')
   conn.commit()
   conn.close()
 
@@ -71,9 +71,9 @@ async def set_birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
   cursor = conn.cursor()
   cursor.execute(
       '''
-         INSERT OR REPLACE INTO birthdays (chat_id, user_id, name, day, month)
-         VALUES (?, ?, ?, ?, ?)
-     ''',
+        INSERT OR REPLACE INTO birthdays (chat_id, user_id, name, day, month)
+        VALUES (?, ?, ?, ?, ?)
+    ''',
       (chat_id, user_id, name, day, month),
   )
   conn.commit()
@@ -95,8 +95,8 @@ async def list_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE):
   conn = sqlite3.connect('birthdays.db')
   cursor = conn.cursor()
   cursor.execute(
-      'SELECT name, day, month FROM birthdays WHERE chat_id = ? ORDER BY'
-      ' month, day',
+      'SELECT name, day, month FROM birthdays WHERE chat_id = ? ORDER BY month,'
+      ' day',
       (chat_id,),
   )
   rows = cursor.fetchall()
@@ -123,12 +123,16 @@ def main():
   app.add_handler(CommandHandler('list_bd', list_birthdays))
 
   if WEBHOOK_URL:
+    webhook_uri = f'https://{WEBHOOK_URL}/{TOKEN}'
+    print(f'DEBUG: Setting webhook to {webhook_uri}')
     app.run_webhook(
         listen='0.0.0.0',
         port=PORT,
-        webhook_url=f'https://{WEBHOOK_URL}/{TOKEN}',
+        webhook_url=webhook_uri,
+        drop_pending_updates=True,
     )
   else:
+    print('DEBUG: WEBHOOK_URL is missing, running polling!')
     app.run_polling()
 
 
