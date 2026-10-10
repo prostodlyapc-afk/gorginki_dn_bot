@@ -1,6 +1,8 @@
+import asyncio
 from datetime import datetime, time, timedelta
 import logging
 import os
+from flask import Flask, request
 import psycopg2
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -12,13 +14,19 @@ logging.basicConfig(
 
 TOKEN = os.environ.get('TOKEN')
 PORT = int(os.environ.get('PORT', '10000'))
-WEBHOOK_URL = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
-print(f'DEBUG: TOKEN present = {bool(TOKEN)}')
-print(f'DEBUG: PORT = {PORT}')
-print(f'DEBUG: RENDER_EXTERNAL_HOSTNAME = {WEBHOOK_URL}')
-print(f'DEBUG: DATABASE_URL present = {bool(DATABASE_URL)}')
+# Ініціалізація Flask-сервера для аптайму та вебхука
+flask_app = Flask(__name__)
+
+
+@flask_app.route('/')
+def index():
+  return 'Bot is alive!', 200
+
+
+# Ініціалізація Telegram бота
+application = Application.builder().token(TOKEN).build()
 
 
 def get_db_connection():
@@ -83,7 +91,6 @@ async def set_birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
   conn = get_db_connection()
   cursor = conn.cursor()
-  # У PostgreSQL використовуємо ON CONFLICT замість INSERT OR REPLACE
   cursor.execute(
       """
         INSERT INTO birthdays (chat_id, user_id, name, day, month, year)
@@ -178,31 +185,31 @@ async def check_birthdays(context: ContextTypes.DEFAULT_TYPE):
       logging.error(f'Failed to send future notification to {chat_id}: {e}')
 
 
-def main():
-  app = Application.builder().token(TOKEN).build()
+application.add_handler(CommandHandler('set', set_birthday))
+application.add_handler(CommandHandler('list', list_birthdays))
 
-  # Змінено назви команд на /set та /list
-  app.add_handler(CommandHandler('set', set_birthday))
-  app.add_handler(CommandHandler('list', list_birthdays))
+job_queue = application.job_queue
+job_queue.run_daily(check_birthdays, time=time(hour=0, minute=1, second=0))
 
-  job_queue = app.job_queue
-  job_queue.run_daily(check_birthdays, time=time(hour=0, minute=1, second=0))
 
-  if WEBHOOK_URL:
-    webhook_uri = f'https://{WEBHOOK_URL}/webhook'
-    print(f'DEBUG: Setting webhook to {webhook_uri}')
+# Обробка вебхука через Flask (підтримує і GET для UptimeRobot, і POST від Telegram)
+@flask_app.route('/webhook', methods=['POST', 'GET'])
+def webhook():
+  if request.method == 'GET':
+    return 'Bot is running', 200
 
-    app.run_webhook(
-        listen='0.0.0.0',
-        port=PORT,
-        webhook_url=webhook_uri,
-        url_path='webhook',
-        drop_pending_updates=True,
-    )
-  else:
-    print('DEBUG: WEBHOOK_URL is missing, running polling!')
-    app.run_polling()
+  if request.headers.get('content-type') == 'application/json':
+    json_string = request.get_data().decode('utf-8')
+    update = Update.de_json(json_string, application.bot)
+
+    async def process():
+      await application.initialize()
+      await application.process_update(update)
+
+    asyncio.run(process())
+    return 'OK', 200
+  return 'Forbidden', 403
 
 
 if __name__ == '__main__':
-  main()
+  flask_app.run(host='0.0.0.0', port=PORT)
